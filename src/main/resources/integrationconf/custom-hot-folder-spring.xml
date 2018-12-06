@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:aop="http://www.springframework.org/schema/aop"
+       xmlns:util="http://www.springframework.org/schema/util"
+       xmlns:int-file="http://www.springframework.org/schema/integration/file"
+       xmlns:int="http://www.springframework.org/schema/integration"
+       xmlns:file="http://www.springframework.org/schema/integration/file"
+       xmlns:task="http://www.springframework.org/schema/task"
+       xmlns:context="http://www.springframework.org/schema/context"
+       xmlns:int-xml="http://www.springframework.org/schema/integration/xml"
+       xsi:schemaLocation="http://www.springframework.org/schema/aop http://www.springframework.org/schema/aop/spring-aop.xsd
+			http://www.springframework.org/schema/integration http://www.springframework.org/schema/integration/spring-integration.xsd
+			http://www.springframework.org/schema/integration/file http://www.springframework.org/schema/integration/file/spring-integration-file.xsd
+			http://www.springframework.org/schema/util  http://www.springframework.org/schema/util/spring-util.xsd
+			http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd
+			http://www.springframework.org/schema/task http://www.springframework.org/schema/task/spring-task.xsd
+			http://www.springframework.org/schema/integration/xml http://www.springframework.org/schema/integration/xml/spring-integration-xml.xsd">
+
+
+    <bean id="transactionReversePopulator" class="com.hotfolder.bank.integration.Populator.TransactionReversePopulator"/>
+
+
+    <bean id="bankRegexParser" class="com.hotfolder.bank.util.RegexParser"/>
+
+    <!-- Import Locations -->
+    <bean id="importTransactionDirectory" class="java.lang.String">
+        <constructor-arg value="${integration.basefolder}/transaction"/>
+    </bean>
+    <!-- Processing Location -->
+    <bean id="importTransactionProcessingDirectory" class="java.lang.String">
+        <constructor-arg value="${integration.processing}"/>
+    </bean>
+    <!-- Archive Location -->
+    <bean id="importTransactionArchiveDirectory" class="java.lang.String">
+        <constructor-arg value="${integration.archives}"/>
+    </bean>
+    <!-- Error Location -->
+    <bean id="importTransactionErrorDirectory" class="java.lang.String">
+        <constructor-arg value="${integration.error}"/>
+    </bean>
+
+    <bean id="importTransactionPoolSize" class="java.lang.String">
+        <constructor-arg value="${integration.poolsize}"/>
+    </bean>
+
+    <bean id="sampleImportTask" class="com.hotfolder.bank.integration.task.SampleImportTask">
+        <property name="transationJob" ref="transationJob"/>
+    </bean>
+
+    <bean id="transationJob" class="com.hotfolder.bank.integration.job.TransationJob">
+        <property name="transactionProcessor" ref="transactionProcessor"/>
+    </bean>
+
+    <bean id="transactionProcessor" class="com.hotfolder.bank.integration.processor.TransactionProcessor">
+        <property name="transactionReversePopulator" ref="transactionReversePopulator"/>
+    </bean>
+
+    <!--Executor-->
+    <task:executor id="importTransactionTaskExecutor" pool-size="#{importTransactionPoolSize}"/>
+
+    <!--File inbound channel -->
+    <int-file:inbound-channel-adapter auto-startup="${hotfolder.integration.active}" id="importTransactionFiles"
+                                      directory="#{importTransactionDirectory}" filename-regex="^.*\.(csv)$"
+                                      prevent-duplicates="false">
+        <int:poller fixed-rate="${integration.import.poller}" task-executor="importTransactionTaskExecutor"/>
+    </int-file:inbound-channel-adapter>
+
+    <file:outbound-gateway request-channel="importTransactionFiles" reply-channel="transactionProc"
+                           directory="#{importTransactionProcessingDirectory}" delete-source-files="true"/>
+
+
+    <int:chain input-channel="transactionProc" output-channel="transactionReady">
+        <int:header-enricher id="HeaderEnricher">
+            <int:header name="file_extension"
+                        expression="payload.getName().substring(payload.getName().lastIndexOf('.'))"/>
+            <int:header name="file_name" expression="payload.getName()"/>
+        </int:header-enricher>
+        <int:transformer >
+            <bean id="importFilesTransformer" class="com.hotfolder.bank.integration.transformer.ImportFilesTransformer"/>
+        </int:transformer>
+    </int:chain>
+
+
+
+    <int:filter  input-channel="transactionReady" output-channel="archiveFiles"  ref="sampleImportTask"
+                method="process" discard-channel="errorFiles" />
+
+    <file:outbound-gateway request-channel="archiveFiles" reply-channel="nullChannel"
+                           directory="#{importTransactionArchiveDirectory}" delete-source-files="true"/>
+
+    <file:outbound-gateway request-channel="errorFiles" reply-channel="nullChannel"
+                           directory="#{importTransactionErrorDirectory}" delete-source-files="true"/>
+
+
+</beans>
